@@ -1,0 +1,215 @@
+# Enhanced API Reference
+
+This page documents the MCP tools currently exposed by `jadx_mcp_server.py`.
+
+## Notes About Responses
+
+- Some underlying plugin endpoints return raw text (`ctx.result(...)` in Java routes).
+- In those cases, the Python MCP server returns:
+  - `{"response": "<raw text>"}` (from `get_from_jadx(...)` fallback)
+- For paginated endpoints, responses generally follow:
+  - `{"type": "...", "items": [...], "pagination": {...}}`
+
+---
+
+## Kotlin metadata slimming
+
+Every tool that returns decompiled source strips the Kotlin compiler annotations before
+answering — `@Metadata(d1 = {...}, d2 = {...})` on Kotlin classes and `@DebugMetadata(...)`
+on coroutines classes. They are compiler IR rather than code, and on a Kotlin APK they are
+routinely 25–50% of a dump, so leaving them in burns an agent's context window.
+
+- Each of those tools takes `slim: bool = True`; pass `slim=False` for the raw dump.
+- A stripped annotation is replaced in place by `/*[slimmed: Kotlin metadata]*/`.
+- **The line count never changes**, so `with_line_numbers=True` and
+  `add_comment(..., line=N)` still address exactly the lines JADX has.
+- Package-qualified forms (`@kotlin.Metadata(...)`,
+  `@kotlin.coroutines.jvm.internal.DebugMetadata(...)`) are covered too.
+- Real annotations (`@Override`, `@Inject`, …) and `/* JADX INFO: ... */` notes are kept.
+- Java dumps are unaffected: nothing matches, so the source is returned untouched.
+
+---
+
+## Class Analysis
+
+### `fetch_current_class(slim: bool = True)`
+Fetches the currently selected class from JADX-GUI.
+
+### `get_selected_text()`
+Returns selected text from the current editor pane.
+
+### `get_all_classes(offset: int = 0, count: int = 0)`
+Returns paginated list of all classes. `count=0` means no explicit limit.
+
+### `get_class_source(class_name: str, with_line_numbers: bool = False, slim: bool = True)`
+Gets full Java source for a class. With `with_line_numbers=True` every line is prefixed
+with its 1-based number, which is what `add_comment` expects in its `line` argument.
+
+### `get_methods_of_class(class_name: str)`
+Lists methods for a class.
+
+### `get_fields_of_class(class_name: str)`
+Lists fields for a class.
+
+### `get_smali_of_class(class_name: str)`
+Gets smali for a class.
+
+### `get_main_application_classes_names()`
+Returns class names under the app package from `AndroidManifest.xml`.
+
+### `get_main_application_classes_code(offset: int = 0, count: int = 0, slim: bool = True)`
+Returns paginated decompiled code for classes under the app package.
+
+### `get_main_activity_class(slim: bool = True)`
+Returns main launcher activity class and source.
+
+### `get_package_tree()`
+Returns package summary with class counts and `is_likely_library` heuristic.
+
+### `get_cache_stats()`
+Returns decompilation cache statistics.
+
+### `clear_cache()`
+Clears decompilation cache and resets counters.
+
+---
+
+## Search
+
+### `get_method_by_name(class_name: str, method_name: str, method_signature: str | None = None, slim: bool = True)`
+Fetches one method body from a specific class. Kotlin metadata is stripped unless `slim=False`.
+
+### `search_method_by_name(method_name: str)`
+Searches method names globally.
+
+Notes:
+- Matching is substring-based.
+- Current Java route returns a newline-delimited class list as text, so output can be:
+  - `{"response": "com.example.A\ncom.example.B\n..."}`
+
+### `search_classes_by_keyword(search_term: str, package: str = "", search_in: str = "code", offset: int = 0, count: int = 20)`
+Searches classes by keyword with package/scope filters.
+
+Valid `search_in` values:
+- `class`
+- `method`
+- `field`
+- `code`
+- `comment`
+
+You can combine scopes with commas, for example:
+- `class,method`
+- `class,method,code`
+
+---
+
+## Resources
+
+### `get_android_manifest()`
+Returns parsed/raw manifest payload from plugin endpoint.
+
+### `get_manifest_component(component_type: str, only_exported: bool = False)`
+Extracts manifest components by type.
+
+Valid `component_type`:
+- `activity`
+- `service`
+- `receiver`
+- `provider`
+
+### `get_strings(offset: int = 0, count: int = 0)`
+Returns paginated strings extracted from resources.
+
+### `get_all_resource_file_names(offset: int = 0, count: int = 0)`
+Returns paginated resource file paths.
+
+### `get_resource_file(resource_name: str)`
+Returns resource file content by path, e.g. `res/layout/activity_main.xml`.
+
+---
+
+## Cross References
+
+### `get_xrefs_to_class(class_name: str, offset: int = 0, count: int = 20)`
+Finds references to a class.
+
+### `get_xrefs_to_method(class_name: str, method_name: str, offset: int = 0, count: int = 20)`
+Finds references to a method (includes override-related methods in route logic).
+
+### `get_xrefs_to_field(class_name: str, field_name: str, offset: int = 0, count: int = 20)`
+Finds references to a field.
+
+---
+
+## Refactoring
+
+### `rename_class(class_name: str, new_name: str)`
+Renames class.
+
+### `rename_method(method_name: str, new_name: str, class_name: str = None, method_signature: str = None)`
+Renames method by name/signature.
+
+Notes:
+- `class_name` is optional but strongly recommended for obfuscated apps.
+- If method overloads exist, provide `method_signature` as well.
+
+### `rename_field(class_name: str, field_name: str, new_name: str)`
+Renames field in a specific class.
+
+### `rename_package(old_package_name: str, new_package_name: str)`
+Renames package.
+
+### `rename_variable(class_name: str, method_name: str, variable_name: str, new_name: str, reg: str = None, ssa: str = None)`
+Renames local variable with optional `reg` and `ssa` disambiguation.
+
+---
+
+## Comments
+
+### `add_comment(class_name: str, comment: str, method_name: str = None, method_signature: str = None, field_name: str = None, line: int = None, style: str = "LINE")`
+Adds a comment to a class, method, field or a single code line. The comment is stored in
+the project code data, so it renders in the JADX-GUI code view and is saved with the
+project file, just like a comment added from the GUI "Add comment" dialog.
+
+Notes:
+- Pass only `class_name` to comment the class, add `method_name` for a method or
+  `field_name` for a field. Provide `method_signature` when overloads exist.
+- `line` comments a single code line, addressed by its 1-based number in the decompiled
+  source (see `get_class_source(..., with_line_numbers=True)`). It is resolved like the
+  GUI comment shortcut: a statement takes the comment at the end of the line, a
+  declaration line comments that declaration, and a rendered comment line edits the
+  comment below it. Braces and blank lines are rejected, listing the closest usable
+  lines. The response reports `attached_to`: `line`, `method`, `field` or `class`.
+- Commenting a target that already has a comment replaces it; an empty `comment` removes
+  it and returns 404 when there is none.
+- `style` is one of `LINE`, `BLOCK`, `BLOCK_CONDENSED`, `JAVADOC`, `JAVADOC_CONDENSED`.
+- Every write is verified against the freshly decompiled code and the response carries
+  `rendered` and `rendered_at_line`. A comment that does not render is rolled back,
+  restoring any comment it replaced, and returns 422: JADX resolves an anchor by
+  indexing the raw instruction array of the referenced method and drops the comment
+  without an error when that lookup misses.
+
+### `list_comments(class_name: str = "")`
+Lists the comments stored in the project, optionally limited to a single declaring
+class. Each entry reports `class_name`, `node_type` (CLASS/METHOD/FIELD), `node_id`,
+`comment` and `style`; comments attached to a single instruction from the GUI also
+carry `code_ref_type` and `offset`.
+
+---
+
+## Debugging
+
+### `debug_get_stack_frames()`
+Returns stack frames when debugger is active and suspended.
+
+### `debug_get_threads()`
+Returns debugged-process threads.
+
+### `debug_get_variables()`
+Returns locals/fields from current debug context.
+
+---
+
+## Tool Count
+
+Current MCP tool count exposed by `jadx_mcp_server.py`: **34**.
